@@ -1,0 +1,105 @@
+# Tofu gallery copy
+
+This repository is Tofu's copy of **mayswind/ezbookkeeping** (licence: MIT), listed in Tofu's app gallery as **Household bookkeeping**: ezBookkeeping, a personal and household finance app for recording income, expenses and transfers across your accounts, with categories, tags, several currencies, charts, and import and export, on a desktop page and a mobile page.
+
+- `main` mirrors the upstream repository and is never committed to by Tofu.
+- `tofu` carries Tofu's own changes; tags named `pin/<date>` mark the versions the gallery points to. The current pin is `pin/2026-10-25`.
+- A visitor who chooses this app gets a private snapshot of the pinned version in their own Tofu account. Their copy does not follow upstream updates.
+- Upstream: https://github.com/mayswind/ezbookkeeping at `c0d3b3826e29d88fabb4b7068c4c606e78ee5675` (2026-10-24, "fix incorrect leap year handling when shifting date ranges"). Upstream's latest release is v2.1.1; `package.json` already says 2.2.0, so the app calls itself v2.2.0-dev.
+
+## How Tofu runs it
+
+- Framework preset `container`, root folder: the repository root. Tofu builds the root `Dockerfile` and runs the image as a service, so there is no separate install command, build command or output directory.
+- The `Dockerfile` is upstream's, with the changes below. It builds in three stages: the Go server on `golang:1.27.1-alpine3.24` (`./build.sh backend --no-lint --no-test`: `go get .`, then a static `CGO_ENABLED=1 go build -a`; cgo is needed by the SQLite driver), the web pages on `node:26.10.0-alpine3.24` (`./build.sh frontend --no-lint --no-test`: `npm install`, then `vite build` into `dist`), and an `alpine:3.24.2` image with the server in `/ezbookkeeping`, the pages in `/ezbookkeeping/public`, and `conf`, `templates` and `LICENSE`.
+- Database: PostgreSQL, the app's Tofu database, read from `DATABASE_URL`. ezBookkeeping creates and updates its 17 tables itself at every start (`auto_update_database = true` in `conf/ezbookkeeping.ini`). There are no migration files and no `supabase/migrations` folder. Without `DATABASE_URL`, ezBookkeeping falls back to SQLite inside the container, which is lost on every restart.
+- Environment: Tofu sets `PORT` and `DATABASE_URL`, and the gallery saves `EBK_SERVER_ROOT_URL` as the copy's own address. Nothing has to be set by hand before the first deploy.
+  - `EBK_SERVER_ROOT_URL` is the address ezBookkeeping puts in the links it builds itself: the QR code for opening the app on a phone, the API and MCP addresses it shows, and sign-in through an outside provider (OAuth 2.0). Without it they would name `http://localhost:80/`.
+  - Every setting in `conf/ezbookkeeping.ini` can be changed on the app's Keys & settings page as `EBK_<SECTION>_<KEY>`, for example `EBK_USER_ENABLE_REGISTER=false` for `enable_register` under `[user]`. Passwords and keys go in as hidden values. ezBookkeeping reads them when it starts, so a change takes effect with the next deploy.
+
+## What Tofu changes
+
+- `tofu-entrypoint.sh` (new). The image now starts through this script. It does three things, then runs upstream's own `/docker-entrypoint.sh` with the same arguments:
+  - It sets `EBK_SERVER_HTTP_PORT` to Tofu's `PORT`. Tofu sends traffic to `PORT`, and ezBookkeeping would otherwise listen on 8080. Without `PORT`, the 8080 from the configuration file stays.
+  - When `DATABASE_URL` is set, it splits it into the settings ezBookkeeping reads, which have no form that takes a URL: `EBK_DATABASE_TYPE=postgres`, `EBK_DATABASE_HOST` (as `host:port`, 5432 when the URL names no port), `EBK_DATABASE_NAME`, `EBK_DATABASE_USER`, `EBK_DATABASE_PASSWD` (the URL's `%XX` escapes decoded) and `EBK_DATABASE_SSL_MODE` (the URL's `sslmode`, or `prefer` when it names none). Any `EBK_DATABASE_*` value the owner sets is kept.
+  - When `EBK_SECURITY_SECRET_KEY` is not set and `DATABASE_URL` is, it derives the key from `DATABASE_URL` (see "The secret key" below), so a copy never runs on upstream's fixed default key.
+- `Dockerfile`:
+  - `ENTRYPOINT` is now `/bin/sh /tofu-entrypoint.sh`, and the script is copied into the image. Upstream's `docker/docker-entrypoint.sh` is unchanged and still starts the server.
+  - Both `./build.sh` steps add `--no-lint --no-test`. Upstream's CI runs `go vet`, `vue-tsc`, `eslint` and the unit tests on every push to its `main`. In a build outside upstream's pipeline (without `BUILD_PIPELINE=1`), as on Tofu, the exchange-rate tests call the live service of every central bank ezBookkeeping supports, so one slow or unreachable bank would fail a copy's build.
+  - Upstream's `USER 1000:1000` is gone, so the server runs as the image's root user. Tofu's hosting sends traffic to `PORT`, which is 80 unless set otherwise, and a process that is not root may not listen on a port below 1024 unless the runtime allows it. The HomeBox copy in the gallery runs as root too.
+- `vite.config.ts`: the build read the commit with `git-rev-sync`, which throws `no git repository found` when there is no `.git` folder. Tofu's GitHub import hands the build the files without `.git`, so the web build failed. It now records an empty commit hash instead, and the version in the app has no `(commit)` suffix.
+- `build.sh`: `git rev-parse` no longer prints `fatal: not a git repository` into the build log; the build already went on without a commit.
+- `pkg/datastore/datastore_container.go`: both PostgreSQL connection strings add `binary_parameters=yes`, and `datastore_container_test.go` expects it. Tofu's `DATABASE_URL` goes through a transaction pooler, which may give each round trip outside a transaction to a different server connection. By default lib/pq sends a query with parameters in two round trips (parse and describe, then bind and execute), so the second can reach a connection that does not hold the statement. With `binary_parameters=yes` it parses, binds and runs each such query in one round trip on the unnamed statement. ezBookkeeping never prepares named statements itself. The option also sends a `[]byte` parameter in binary form; ezBookkeeping passes those only for its `BLOB` columns (`bytea` in PostgreSQL), whose binary form is the same bytes.
+- `conf/ezbookkeeping.ini`:
+  - `[log] mode` is `console` (upstream: `console file`). Tofu's runtime logs read the console, and a log file in the container is lost on every restart.
+  - `[user] enable_custom_icon` and `enable_transaction_picture` are `false`, and `avatar_provider` is empty (upstream: `true`, `true`, `internal`). All three keep files in the object storage under `[storage]`, whose default is the container's own disk. See "What works differently on Tofu".
+  - `[user] enable_scheduled_transaction` is `false` (upstream: `true`). See "What works differently on Tofu".
+- Nothing is removed. Upstream's GitHub and Gitea workflows (`.github/workflows`, `.gitea/workflows`) stay: Tofu's safety check has no finding on them, and a copy never runs them.
+
+## The secret key
+
+ezBookkeeping encrypts each account's two-factor (authenticator app) secret in the database with `secret_key` under `[security]` (`EBK_SECURITY_SECRET_KEY`), and mixes it into two values it keeps in memory (the authenticator codes already used, and request IDs). Sign-in sessions are checked against a secret stored with each session in the database, and passwords are hashed with each account's own salt, so neither depends on the key.
+
+- On Tofu the key is derived from `DATABASE_URL` each time the container starts: the SHA-256 of `ezbookkeeping-secret-key:` followed by the whole `DATABASE_URL`, as 64 hex characters. Nothing has to be set. A key the owner sets always wins, as does its file form, `EBKCFP_SECURITY_SECRET_KEY`.
+- Anything that changes `DATABASE_URL` changes the key at the next start: a new database password, a different host, port or pooler address, other query options, or a database Tofu brings back or creates anew under a different address. After that start, an account that turned on two-factor sign-in can no longer sign in with its authenticator app's codes. From the code (not tried): it can still sign in with one of its recovery codes, which do not depend on the key, then turn two-factor sign-in off (which asks for the password) and on again. Sign-in sessions, passwords and the books are not affected.
+- To keep the key independent of the database address, set `EBK_SECURITY_SECRET_KEY` as a hidden value on the app's Keys & settings page, for example the output of `openssl rand -hex 32`, and keep it unchanged afterwards. Set it before anyone turns on two-factor sign-in: moving from the derived key to your own has the same effect on the authenticator codes set up until then.
+- The derived key is only as secret as `DATABASE_URL`, which Tofu keeps as a hidden value.
+- Without `DATABASE_URL` and without `EBK_SECURITY_SECRET_KEY`, ezBookkeeping starts on SQLite inside the container, with upstream's fixed default key (the word `ezbookkeeping` from its source code), and logs `"secret_key" in config file is not set`. A gallery copy always has its database, so this does not happen there. If the image had no `sha256sum`, the script would stop with `could not derive secret_key from DATABASE_URL; set EBK_SECURITY_SECRET_KEY` rather than start on that default key.
+
+## Accounts and sign-up
+
+- ezBookkeeping has its own login, not Tofu sign-in. Its sign-in page offers "Create an account", and anyone who can open the address can create one until the owner sets `EBK_USER_ENABLE_REGISTER=false` on the app's Keys & settings page (or makes the app private on Tofu). Make your own account first, then set it; it takes effect with the next deploy. With it, the sign-in page no longer offers "Create an account" and `/api/register.json` answers 404.
+- Every account keeps its own books, which other accounts cannot see. No account is an administrator, and the first account has no extra rights.
+- An account needs no email confirmation. "Forget Password?" stays on the sign-in page, but without a mail server it answers `SMTP server is not enabled`. To send reset emails, set the `[mail]` settings: `EBK_MAIL_ENABLE_SMTP=true`, `EBK_MAIL_SMTP_HOST` (`host:port`), `EBK_MAIL_SMTP_USER`, `EBK_MAIL_FROM_ADDRESS`, and `EBK_MAIL_SMTP_PASSWD` as a hidden value.
+- Two-factor sign-in is in each account's settings; read "The secret key" before turning it on.
+
+## What works differently on Tofu
+
+- **No transaction pictures, custom icons or avatars.** Uploads go to the object storage under `[storage]`, whose default is a folder on the container's own disk, and Tofu's containers lose that folder on every restart and deploy. To use them, point `[storage]` at an S3-compatible bucket (`EBK_STORAGE_TYPE=s3`, `EBK_STORAGE_S3_ENDPOINT`, `EBK_STORAGE_S3_REGION`, `EBK_STORAGE_S3_BUCKET`, `EBK_STORAGE_S3_USE_SSL=true`, `EBK_STORAGE_S3_ACCESS_KEY_ID`, and `EBK_STORAGE_S3_SECRET_ACCESS_KEY` as a hidden value; MinIO and WebDAV work too), then set `EBK_USER_ENABLE_TRANSACTION_PICTURE=true`, `EBK_USER_ENABLE_CUSTOM_ICON=true` and `EBK_USER_AVATAR_PROVIDER=internal`. `EBK_USER_AVATAR_PROVIDER=gravatar` needs no storage instead: each person's browser then loads their picture from gravatar.com, which receives a hash of their email address.
+- **No scheduled transactions.** ezBookkeeping creates them from templates with a job that runs inside the server every 15 minutes, and each run creates only the templates due in that 15-minute window. It never catches up. A copy on Tofu stops while nobody uses it, so most scheduled transactions would silently never be created. `EBK_USER_ENABLE_SCHEDULED_TRANSACTION=true` turns them back on for an app that is kept awake.
+- **One server at a time.** New records get IDs from the time, a server number (0) and a counter kept in memory. Two servers of the same app running at once could give two new records the same ID in the same second, and then one of the two saves fails. The record of authenticator codes already used and the count of failed sign-ins per address also live in memory, and start fresh after a restart.
+- **The app calls out for some features.** The server asks the European Central Bank (the default `[exchange_rates] data_source`; no key) for exchange rates. Where a page shows a map (a transaction's location), the browser loads map tiles from OpenStreetMap. The sign-in page, the home page and the transaction list load nothing from anywhere else.
+- **The Database page lists the tables under No access rules.** ezBookkeeping creates its 17 tables itself, without row-level security. Its own connection is not limited by such rules, and no part of the app reads the database through the Data API.
+- **The version shows no commit.** Tofu's build has no `.git` folder, so the version reads `v2.2.0-dev` without `(commit)`.
+
+## Needs a real deploy to verify
+
+- The image builds on Tofu's container hosting, within its limits: the `FROM --platform=$BUILDPLATFORM` stage, `apk add` from Alpine's mirrors, `go get .` and the module downloads, `npm install`, and the static musl link of the SQLite driver. The Go step runs `go build -a`, which rebuilds every package. Locally, without Docker, the two `build.sh` steps took 24 s and 43 s.
+- The server starts as root, listens on `PORT` on all addresses, and answers `/`.
+- The first start connects through Tofu's pooler with `sslmode=require` (TLS without checking the server's certificate, which is what lib/pq does for `require`) and creates the 17 tables. The runtime logs show no `prepared statement` errors (SQLSTATE 26000 or 42P05).
+- Sign-up, sign-in, and creating, editing and deleting accounts and transactions all work.
+- Whether ezBookkeeping sees each visitor's own address. It takes a forwarded address only from a proxy in `[security] trusted_proxy_ips`, the private address ranges by default. If Tofu's proxy is not one of them, every visitor shares one address: five failed sign-ins in a minute from anyone would then refuse sign-in attempts from everyone for the rest of that minute.
+- The European Central Bank's rates answer from Tofu's network.
+- Tofu's Free plan ends a request after 60 seconds, so a large import (up to the 10 MB upstream allows) could be cut off.
+
+## Licence
+
+- MIT. `LICENSE` ("Copyright (c) 2020-2026 MaysWind") and every copyright notice stay exactly as upstream has them. Every file Tofu changes carries a dated `Tofu (2026-10-25)` note at the change; `tofu-entrypoint.sh` and this file are Tofu's own. No file was removed.
+- The ezBookkeeping name and logo belong to the upstream project; the gallery uses them only to say which app this is. The app's own pages keep upstream's links to https://github.com/mayswind/ezbookkeeping ("Powered by ezBookkeeping", the About page). MIT asks for no source offer; Tofu's changes are public in this repository.
+- The web pages bundle third-party libraries and icon fonts (Framework7 Icons, Line Awesome and Monaco's codicons), each under its own licence, listed in `third-party-dependencies.json` and shown in the app's About dialog.
+
+## Verification
+
+2026-10-25, on macOS arm64 against 127.0.0.1 only. No Docker, nothing deployed.
+
+- Tofu's own check on the pushed `tofu` branch (the GitHub import, then Tofu's static-lane and safety predicates) printed `safety ok (2 findings)` and `detect=container`, with the import holding 1113 files. The two findings are medium `obfuscated-code` notes on `src/components/desktop/CustomChart.vue:203` and `src/views/desktop/transactions/import/tabs/ImportTransactionExecuteCustomScriptTab.vue:152`. Both run, inside a sandboxed frame, a script the signed-in person writes themselves (a custom chart, a custom import parser). They do not block a deploy, and upstream's commit has the same two. The app is not on the static lane, as expected for an app that ships a `Dockerfile`.
+- Built from an import-style copy of the branch (`git archive tofu` into an empty folder, so without `.git`), with Go 1.27.3 (`go.mod` asks for 1.27.1) and Node 22.22.3 with npm 10.9.8 (the image uses Node 26.10.0):
+  - `./build.sh frontend --no-lint --no-test` finished in 43 s (`npm install` 7 s): no `fatal` line, and the bundle's commit hash is empty.
+  - `./build.sh backend --no-lint --no-test` finished in 24 s and left `go.mod` and `go.sum` unchanged. On macOS `build.sh` links dynamically; the static link flags apply on Linux only, so the image's static musl link was not run.
+  - `gofmt -l`, `go vet ./pkg/datastore/` and `go test ./pkg/datastore/...` pass, and `sh -n tofu-entrypoint.sh` passes.
+- `tofu-entrypoint.sh` with fake values, its last `exec` pointed at a script that prints the settings:
+  - `PORT=3000` and `postgresql://postgres.<ref>:p%40ss%2Fw0rd%25x%5C@aws-0-us-east-1.pooler.supabase.com:6543/postgres?sslmode=require` gave `EBK_SERVER_HTTP_PORT=3000`, `EBK_DATABASE_HOST=aws-0-us-east-1.pooler.supabase.com:6543`, `EBK_DATABASE_NAME=postgres`, `EBK_DATABASE_USER=postgres.<ref>`, the password decoded to `p@ss/w0rd%x\`, `EBK_DATABASE_SSL_MODE=require` and a 64-character hex key.
+  - A host without a port got `:5432`; IPv6 hosts kept their brackets; an `sslmode` after another query option was found; a URL without one gave `prefer`; a database name `db%20name` became `db name`.
+  - A host and a key the owner set were kept, and arguments were passed on.
+  - Without `DATABASE_URL` nothing was set; a `mysql://` URL left everything as it was and said so; the same URL always gave the same key and another password another key; without `sha256sum` the script stopped with exit status 1 and its message.
+  - These ran under macOS's `/bin/sh` (bash 3.2), with a `sha256sum` shim over `shasum -a 256`. The image's shell, BusyBox `ash`, was not run.
+- Run as the container would. A folder laid out like the image's `/ezbookkeeping` (the binary, `dist` as `public`, `conf`, `templates`, `LICENSE`, empty `data`, `log` and `storage`), started through this branch's `tofu-entrypoint.sh` and upstream's `docker-entrypoint.sh`, with only their `exec` paths pointed at the local files. The environment was cleared, then given `PORT`, `TZ=UTC`, `EBK_SERVER_ROOT_URL=http://127.0.0.1:<port>/`, `EBK_SERVER_HTTP_ADDR=127.0.0.1` (local only; on Tofu it listens on all addresses) and `DATABASE_URL=postgresql://<user>:p%40ss%2Fw0rd@127.0.0.1:5432/<scratch database>?sslmode=disable`, against a scratch PostgreSQL 14.
+  - The start log showed the database password and the secret key as `****`, no `secret_key ... is not set` warning, console-only logs, transaction pictures, custom icons and scheduled transactions off and no avatar provider, then the 17 tables created.
+  - `GET /` answered 200 (`text/html`), and `/server_settings.js` had sign-up on, custom icons, pictures and scheduled transactions off.
+- The core action, through the API: signing up with a Food category holding a Groceries subcategory, creating the account "Wallet", and adding an expense of 12.34 with the note "Tofu check: groceries". `/api/v1/transactions/list.json` read it back with the same account and category, the account's balance read -12.34, and signing in again worked. The rows were in PostgreSQL, and the log had no `[ERROR]` or `[WARN]` line.
+- Restarted with `EBK_USER_ENABLE_REGISTER=false`: sign-up was off in `/server_settings.js`, `POST /api/register.json` answered 404 `api not found`, and the same person signed in and still had the expense.
+- In that run, with lib/pq's protocol trace on (`PQGO_DEBUG=1`), every one of the 63 queries with parameters went out as Parse, Bind, Describe, Execute and a single Sync, in one round trip, and lib/pq's two-round-trip path (`conn.prepareTo`) never ran. No transaction pooler was available here, so the copy's real pooler was not tried.
+- Browser: headless Chromium 156 through Playwright, every address but 127.0.0.1 blocked (none was asked for) and service workers off.
+  - `/` opened `/desktop#/login`, with "Create an account" and "Powered by ezBookkeeping v2.2.0-dev".
+  - Signing in reached `/desktop#/`, and the transaction list showed "October 25, 2026", "Groceries", "$ 12.34", "Wallet" and "Tofu check: groceries".
+  - No page error, no console error, and no failed request.
+- All local servers were stopped and the scratch database was dropped afterwards.
