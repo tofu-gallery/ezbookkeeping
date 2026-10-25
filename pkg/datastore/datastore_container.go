@@ -127,9 +127,14 @@ func getMysqlConnectionString(dbConfig *settings.DatabaseConfig) (string, error)
 		dbConfig.DatabaseUser, dbConfig.DatabasePassword, protocol, dbConfig.DatabaseHost, dbConfig.DatabaseName), nil
 }
 
+// Tofu (2026-10-25): both connection strings below add "binary_parameters=yes". Tofu's database is reached through a
+// transaction pooler, which may hand each round trip outside a transaction to a different server connection. Without
+// this option lib/pq parses a query with parameters in one round trip and binds it in the next, so the second can
+// reach a connection that does not hold the statement; with it, a query is parsed, bound and run in a single round
+// trip on the unnamed statement. ezBookkeeping never prepares named statements itself.
 func getPostgresConnectionString(dbConfig *settings.DatabaseConfig) (string, error) {
 	if strings.HasPrefix(dbConfig.DatabaseHost, "/") { // unix socket path
-		return fmt.Sprintf("postgres:///%s?sslmode=%s&host=%s&user=%s&password=%s",
+		return fmt.Sprintf("postgres:///%s?sslmode=%s&host=%s&user=%s&password=%s&binary_parameters=yes",
 			dbConfig.DatabaseName, dbConfig.DatabaseSSLMode, dbConfig.DatabaseHost, url.QueryEscape(dbConfig.DatabaseUser), url.QueryEscape(dbConfig.DatabasePassword)), nil
 	} else {
 		host, port, err := net.SplitHostPort(dbConfig.DatabaseHost)
@@ -138,7 +143,7 @@ func getPostgresConnectionString(dbConfig *settings.DatabaseConfig) (string, err
 			return "", errs.ErrDatabaseHostInvalid
 		}
 
-		return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s&binary_parameters=yes",
 			url.QueryEscape(dbConfig.DatabaseUser), url.QueryEscape(dbConfig.DatabasePassword), host, port, dbConfig.DatabaseName, dbConfig.DatabaseSSLMode), nil
 	}
 }
