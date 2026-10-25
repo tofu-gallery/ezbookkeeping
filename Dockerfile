@@ -60,7 +60,9 @@ COPY --from=fe-builder --chown=1000:1000 /go/src/github.com/mayswind/ezbookkeepi
 COPY --chown=1000:1000 conf /ezbookkeeping/conf
 COPY --chown=1000:1000 templates /ezbookkeeping/templates
 COPY --chown=1000:1000 LICENSE /ezbookkeeping/LICENSE
-USER 1000:1000
+# Tofu (2026-10-25): upstream switches to "USER 1000:1000" here. Tofu's hosting sends traffic to PORT, which is 80
+# unless set otherwise, and a process that is not root may not listen on a port below 1024 unless the runtime allows
+# it, so on Tofu the server runs as the image's root user.
 EXPOSE 8080
 # Tofu (2026-10-25): upstream starts "/docker-entrypoint.sh" directly.
 ENTRYPOINT ["/bin/sh", "/tofu-entrypoint.sh"]
