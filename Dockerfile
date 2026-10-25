@@ -14,12 +14,14 @@ ENV CHECK_3RD_API=$CHECK_3RD_API
 ENV SKIP_TESTS=$SKIP_TESTS
 WORKDIR /go/src/github.com/mayswind/ezbookkeeping
 COPY . .
-RUN docker/backend-build-pre-setup.sh
+# Tofu (2026-10-25): the repository's scripts run through sh here and below (upstream runs them as programs). Tofu
+# uploads a copy's files without their Unix mode, so in its build every file is 0644 and not executable.
+RUN sh docker/backend-build-pre-setup.sh
 RUN apk add git gcc g++ libc-dev
 # Tofu (2026-10-25): --no-lint --no-test. Upstream's CI runs go vet and the unit tests (after `go clean -cache`) on
 # this commit. In a build without BUILD_PIPELINE=1, as on Tofu, the exchange-rate tests also call the live API of
 # every central bank ezBookkeeping supports, so one slow or unreachable bank would fail a copy's build.
-RUN ./build.sh backend --no-lint --no-test
+RUN sh ./build.sh backend --no-lint --no-test
 
 # Build frontend files
 FROM --platform=$BUILDPLATFORM node:26.10.0-alpine3.24 AS fe-builder
@@ -35,10 +37,11 @@ ENV BUILD_DATE=$BUILD_DATE
 ENV NODE_OPTIONS=$BUILD_NODE_OPTIONS
 WORKDIR /go/src/github.com/mayswind/ezbookkeeping
 COPY . .
-RUN docker/frontend-build-pre-setup.sh
+# Tofu (2026-10-25): through sh, as for the backend above.
+RUN sh docker/frontend-build-pre-setup.sh
 RUN apk add git
 # Tofu (2026-10-25): --no-lint --no-test, as for the backend above (vue-tsc, eslint and vitest).
-RUN ./build.sh frontend --no-lint --no-test
+RUN sh ./build.sh frontend --no-lint --no-test
 
 # Package docker image
 FROM alpine:3.24.2
