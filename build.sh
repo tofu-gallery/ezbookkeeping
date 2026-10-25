@@ -130,7 +130,9 @@ check_type_dependencies() {
 
 set_build_parameters() {
     VERSION="$(grep '"version": ' package.json | awk -F ':' '{print $2}' | tr -d ' ' | tr -d ',' | tr -d '"')"
-    COMMIT_HASH="$(git rev-parse --short=7 HEAD)"
+    # Tofu (2026-10-25): Tofu builds an imported copy of the code without a .git folder, where this finds no commit;
+    # the hash is then left empty, without git's "fatal: not a git repository" line in the build log.
+    COMMIT_HASH="$(git rev-parse --short=7 HEAD 2>/dev/null)"
 
     if [ -z "$BUILD_UNIXTIME" ]; then
         BUILD_UNIXTIME="$(date '+%s')"
