@@ -3,20 +3,24 @@ package utils
 import (
 	"bytes"
 	"net"
-
-	"github.com/mayswind/ezbookkeeping/pkg/errs"
 )
 
+// Tofu (2026-10-26): the machine's own address list, in a variable so that a test can replace it (network_test.go)
+var interfaceAddrs = net.InterfaceAddrs
+
+// Tofu (2026-10-26): the address GetLocalIPAddressesString gives when the machine reports no other one
+const fallbackLocalIPAddress = "127.0.0.1"
+
 // GetLocalIPAddressesString returns all local ip address, every ip split by comma
+// Tofu (2026-10-26): when the machine has no address but loopback and link-local ones, or cannot list its addresses,
+// this returns 127.0.0.1 instead of an error. A Tofu container has no other address, and the error stopped the server
+// at start ("initializes requestid generator failed, because failed to get local address") and would skip every cron
+// job run. Both callers only mix the text into an identifier and a log line.
 func GetLocalIPAddressesString() (string, error) {
 	localAddrs, err := GetLocalIPAddresses()
 
-	if err != nil {
-		return "", err
-	}
-
-	if len(localAddrs) < 1 {
-		return "", errs.ErrGettingLocalAddress
+	if err != nil || len(localAddrs) < 1 {
+		return fallbackLocalIPAddress, nil
 	}
 
 	buff := &bytes.Buffer{}
@@ -34,7 +38,7 @@ func GetLocalIPAddressesString() (string, error) {
 
 // GetLocalIPAddresses returns all local ip address object array
 func GetLocalIPAddresses() ([]net.IP, error) {
-	addrs, err := net.InterfaceAddrs()
+	addrs, err := interfaceAddrs()
 
 	if err != nil {
 		return nil, err
