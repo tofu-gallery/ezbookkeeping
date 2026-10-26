@@ -49,8 +49,9 @@ const (
 )
 
 // UpdateStructure runs sync, which syncs every table of the app, as the start-up schema step. On a single PostgreSQL
-// database it runs inside one transaction holding the schema step's advisory lock; unless force is set, it is skipped
-// when this same build already completed it on this database. A start that meets an object another start created at the same moment runs the whole
+// database it runs inside one transaction holding the schema step's advisory lock, followed in the same transaction by
+// row-level security on every table it synced; unless force is set, it is skipped when this same build already
+// completed it on this database. A start that meets an object another start created at the same moment runs the whole
 // step once more. On any other database sync runs as upstream runs it.
 func (s *DataStoreContainer) UpdateStructure(c core.Context, force bool, sync func() error) error {
 	db := s.singlePostgresDatabase()
@@ -125,10 +126,17 @@ func (db *Database) runSchemaStep(c core.Context, force bool, fingerprint string
 		}
 
 		db.schemaSession = sess
+		db.schemaTables = nil
 		err = sync()
+		tables := append(db.schemaTables, schemaStateTable)
 		db.schemaSession = nil
+		db.schemaTables = nil
 
 		if err != nil {
+			return err
+		}
+
+		if _, err = sess.Exec(rowLevelSecuritySQL(tables)); err != nil {
 			return err
 		}
 
@@ -141,13 +149,17 @@ func (db *Database) runSchemaStep(c core.Context, force bool, fingerprint string
 			}
 		}
 
-		log.BootInfof(c, "[datastore.runSchemaStep] database tables updated")
+		log.BootInfof(c, "[datastore.runSchemaStep] database tables updated, with row-level security on %d tables", len(tables))
 		return nil
 	})
 }
 
-// syncStructsInSchemaStep syncs beans in the schema step's transaction
+// syncStructsInSchemaStep syncs beans in the schema step's transaction and remembers their tables
 func (db *Database) syncStructsInSchemaStep(beans ...any) error {
+	for _, bean := range beans {
+		db.schemaTables = append(db.schemaTables, db.engineGroup.TableName(bean))
+	}
+
 	return db.schemaSession.Sync(beans...)
 }
 
@@ -178,6 +190,43 @@ func schemaStepFingerprint() string {
 	}
 
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// rowLevelSecuritySQL turns on row-level security for the given tables of the current schema, in one statement, on a
+// database that has the roles of Supabase's Data API (anon, authenticated). Today's Tofu databases still grant every
+// new table in public to those roles, so without it anyone holding the project's public key could read and change
+// ezBookkeeping's tables through the Data API. With row-level security on and no policy, those roles see no row and
+// may add none, while ezBookkeeping's own connection, which owns the tables, is not limited by it. A table that already
+// has it, or that ezBookkeeping's role does not own, is left as it is.
+func rowLevelSecuritySQL(tables []string) string {
+	names := make([]string, 0, len(tables))
+
+	for _, table := range tables {
+		names = append(names, "'"+strings.ReplaceAll(table, "'", "''")+"'")
+	}
+
+	return `DO $tofu$
+DECLARE
+	t record;
+BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname IN ('anon', 'authenticated')) THEN
+		RETURN;
+	END IF;
+
+	FOR t IN
+		SELECT n.nspname, c.relname
+		FROM pg_catalog.pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = pg_catalog.current_schema()
+			AND c.relkind IN ('r', 'p')
+			AND NOT c.relrowsecurity
+			AND c.relowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)
+			AND c.relname = ANY (ARRAY[` + strings.Join(names, ", ") + `]::text[])
+	LOOP
+		EXECUTE pg_catalog.format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', t.nspname, t.relname);
+	END LOOP;
+END
+$tofu$`
 }
 
 // isDuplicateObjectError tells whether err is PostgreSQL refusing to create an object that already exists

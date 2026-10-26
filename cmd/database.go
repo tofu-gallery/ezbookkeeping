@@ -46,7 +46,8 @@ func updateDatabaseStructure(c *core.CliContext) error {
 // Tofu (2026-10-26): the server's start runs upstream's table syncs (syncAllDatabaseTablesStructure, below) through
 // datastore.Container.UpdateStructure (pkg/datastore/tofu_schema_step.go). On PostgreSQL they run inside one
 // transaction that first takes an advisory lock, so that several starts at once no longer create the same tables at
-// the same moment; and not at all when this same build already did this on this database.
+// the same moment, followed by row-level security on every table; and not at all when this same build already did
+// this on this database.
 func updateAllDatabaseTablesStructure(c *core.CliContext) error {
 	return datastore.Container.UpdateStructure(c, false, func() error { return syncAllDatabaseTablesStructure(c) })
 }
