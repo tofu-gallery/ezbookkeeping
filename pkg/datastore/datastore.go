@@ -42,7 +42,13 @@ func (s *DataStore) SyncStructs(beans ...any) error {
 	var err error
 
 	for i := 0; i < len(s.databases); i++ {
-		err = s.databases[i].engineGroup.Sync2(beans...)
+		// Tofu (2026-10-26): inside the start-up schema step, the tables are synced in its locked transaction
+		// (tofu_schema_step.go)
+		if s.databases[i].schemaSession != nil {
+			err = s.databases[i].syncStructsInSchemaStep(beans...)
+		} else {
+			err = s.databases[i].engineGroup.Sync2(beans...)
+		}
 
 		if err != nil {
 			return err

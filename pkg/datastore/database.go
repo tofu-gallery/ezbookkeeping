@@ -11,6 +11,9 @@ import (
 type Database struct {
 	databaseType string
 	engineGroup  *xorm.EngineGroup
+
+	// Tofu (2026-10-26): while the start-up schema step runs, the locked transaction it runs in (tofu_schema_step.go)
+	schemaSession *xorm.Session
 }
 
 // NewSession starts a new session with the specified context

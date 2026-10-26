@@ -31,7 +31,8 @@ func updateDatabaseStructure(c *core.CliContext) error {
 
 	log.CliInfof(c, "[database.updateDatabaseStructure] starting maintaining")
 
-	err = updateAllDatabaseTablesStructure(c)
+	// Tofu (2026-10-26): this command syncs every table even when this build already did (see below)
+	err = datastore.Container.UpdateStructure(c, true, func() error { return syncAllDatabaseTablesStructure(c) })
 
 	if err != nil {
 		log.CliErrorf(c, "[database.updateDatabaseStructure] update database table structure failed, because %s", err.Error())
@@ -42,7 +43,15 @@ func updateDatabaseStructure(c *core.CliContext) error {
 	return nil
 }
 
+// Tofu (2026-10-26): the server's start runs upstream's table syncs (syncAllDatabaseTablesStructure, below) through
+// datastore.Container.UpdateStructure (pkg/datastore/tofu_schema_step.go). On PostgreSQL they run inside one
+// transaction that first takes an advisory lock, so that several starts at once no longer create the same tables at
+// the same moment; and not at all when this same build already did this on this database.
 func updateAllDatabaseTablesStructure(c *core.CliContext) error {
+	return datastore.Container.UpdateStructure(c, false, func() error { return syncAllDatabaseTablesStructure(c) })
+}
+
+func syncAllDatabaseTablesStructure(c *core.CliContext) error {
 	var err error
 
 	err = datastore.Container.UserStore.SyncStructs(new(models.User))
