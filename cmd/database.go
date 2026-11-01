@@ -159,6 +159,14 @@ func syncAllDatabaseTablesStructure(c *core.CliContext) error {
 
 	log.BootInfof(c, "[database.updateAllDatabaseTablesStructure] user custom icon table maintained successfully")
 
+	err = datastore.Container.UserDataStore.SyncStructs(new(models.ImportPreset))
+
+	if err != nil {
+		return err
+	}
+
+	log.BootInfof(c, "[database.updateAllDatabaseTablesStructure] user import preset table maintained successfully")
+
 	err = datastore.Container.UserDataStore.SyncStructs(new(models.UserCustomExchangeRate))
 
 	if err != nil {

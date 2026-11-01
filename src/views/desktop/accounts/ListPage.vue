@@ -196,13 +196,13 @@
                                                             <v-btn :value="''">
                                                                 <span>{{ tt('All') }}</span>
                                                             </v-btn>
-                                                            <v-btn :key="subAccount.id" :value="subAccount.id"
-                                                                   v-for="subAccount in element.subAccounts"
-                                                                   v-show="showHidden || !subAccount.hidden">
-                                                                <ItemIcon size="1.5rem" :icon-type="getAccountIconType(subAccount.iconType)" :icon-id="subAccount.icon"
-                                                                          :color="subAccount.color" :hidden-status="subAccount.hidden" />
-                                                                <span class="ms-2">{{ subAccount.name }}</span>
-                                                            </v-btn>
+                                                            <template :key="subAccount.id" v-for="subAccount in element.subAccounts">
+                                                                <v-btn :value="subAccount.id" v-if="showHidden || !subAccount.hidden">
+                                                                    <ItemIcon size="1.5rem" :icon-type="getAccountIconType(subAccount.iconType)" :icon-id="subAccount.icon"
+                                                                              :color="subAccount.color" :hidden-status="subAccount.hidden" />
+                                                                    <span class="ms-2">{{ subAccount.name }}</span>
+                                                                </v-btn>
+                                                            </template>
                                                         </v-btn-toggle>
                                                     </div>
                                                 </template>
@@ -276,7 +276,7 @@
                                                                                  @click="moveAllTransactions(element.getAccountOrSubAccount(activeSubAccount[element.id]))"></v-list-item>
                                                                     <v-list-item class="text-body-medium" density="compact"
                                                                                  :title="tt('Clear All Transactions')"
-                                                                                 :prepend-icon="mdiEraser"
+                                                                                 :prepend-icon="mdiDeleteSweepOutline"
                                                                                  @click="clearAllTransactions(element.getAccountOrSubAccount(activeSubAccount[element.id]))"></v-list-item>
                                                                 </v-list>
                                                             </v-menu>
@@ -379,7 +379,7 @@ import {
     mdiDotsHorizontalCircleOutline,
     mdiReceiptTextCheckOutline,
     mdiSwapHorizontal,
-    mdiEraser,
+    mdiDeleteSweepOutline,
     mdiDeleteOutline,
     mdiListBoxOutline,
     mdiInvoiceListOutline,
