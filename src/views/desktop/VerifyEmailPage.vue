@@ -8,7 +8,7 @@
         </router-link>
         <v-row no-gutters class="auth-wrapper">
             <v-col cols="12" md="8" class="auth-image-background d-none d-md-flex align-center justify-center position-relative">
-                <auth-illustration variant="signup" />
+                <auth-illustration variant="verify" :verified="verified" />
             </v-col>
             <v-col cols="12" md="4" class="auth-card d-flex flex-column">
                 <div class="d-flex align-center justify-center h-100">
@@ -47,9 +47,9 @@
                                     <v-col cols="12">
                                         <router-link class="d-flex align-center justify-center mt-2"
                                                      :class="{ 'disabled': loading || resending }"
-                                                     :to="verified ? '/' : '/login'">
+                                                     :to="verified && isUserLogined() ? '/' : '/login'">
                                             <v-icon class="icon-with-direction" :icon="mdiChevronLeft"/>
-                                            <span class="text-body-medium" v-if="!verified">{{ tt('Back to login page') }}</span>
+                                            <span class="text-body-medium" v-if="!verified || !isUserLogined()">{{ tt('Back to login page') }}</span>
                                             <span class="text-body-medium" v-else-if="verified">{{ tt('Back to home page') }}</span>
                                         </router-link>
                                     </v-col>
@@ -135,10 +135,7 @@ function init(): void {
         return;
     }
 
-    rootStore.verifyEmail({
-        token: props.token,
-        requestNewToken: !isUserLogined()
-    }).then(() => {
+    rootStore.verifyEmail(props.token).then(() => {
         loading.value = false;
         verified.value = true;
         snackbar.value?.showMessage('Email address is verified');

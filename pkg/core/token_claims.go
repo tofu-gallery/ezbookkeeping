@@ -57,6 +57,22 @@ var TextualTokenTypesReverse = func() map[string]TokenType {
 	return reverseMap
 }()
 
+// TextualDerivedTokenType represents the textual type of a derived token
+type TextualDerivedTokenType string
+
+// Textual derived token types
+const (
+	NONE_DERIVED_TOKEN                       TextualDerivedTokenType = ""
+	USER_AVATAR_DERIVED_NORMAL_TOKEN         TextualDerivedTokenType = "a"
+	TRANSACTION_PICTURE_DERIVED_NORMAL_TOKEN TextualDerivedTokenType = "p"
+)
+
+// ValidTextualDerivedTokenTypes contains all supported textual derived token types
+var ValidTextualDerivedTokenTypes = map[TextualDerivedTokenType]bool{
+	USER_AVATAR_DERIVED_NORMAL_TOKEN:         true,
+	TRANSACTION_PICTURE_DERIVED_NORMAL_TOKEN: true,
+}
+
 // UserTokenClaims represents user token
 type UserTokenClaims struct {
 	UserTokenId string    `json:"userTokenId"`
@@ -69,7 +85,8 @@ type UserTokenClaims struct {
 
 // NormalTokenAdditionalData represents the additional data of a normal token
 type NormalTokenAdditionalData struct {
-	Scope NormalTokenScope
+	Scope                 NormalTokenScope
+	DerivedTokenExpiresAt int64
 }
 
 // NormalTokenScope represents the scope of a normal token
@@ -77,25 +94,54 @@ type NormalTokenScope byte
 
 // Normal token scopes
 const (
-	NormalTokenScopeAll NormalTokenScope = 1
+	NormalTokenScopeInvalid            NormalTokenScope = 0
+	NormalTokenScopeAll                NormalTokenScope = 1
+	NormalTokenScopeUserAvatar         NormalTokenScope = 2
+	NormalTokenScopeTransactionPicture NormalTokenScope = 3
+
+	NormalTokenScopeMinValue NormalTokenScope = NormalTokenScopeAll
+	NormalTokenScopeMaxValue NormalTokenScope = NormalTokenScopeTransactionPicture
 )
+
+// NormalTokenScopeDerivedTokenTypeMap maps normal token scopes to their corresponding derived token types
+var NormalTokenScopeDerivedTokenTypeMap = map[NormalTokenScope]TextualDerivedTokenType{
+	NormalTokenScopeUserAvatar:         USER_AVATAR_DERIVED_NORMAL_TOKEN,
+	NormalTokenScopeTransactionPicture: TRANSACTION_PICTURE_DERIVED_NORMAL_TOKEN,
+}
 
 // MarshalBinary returns the binary representation of the normal token additional data.
 func (d *NormalTokenAdditionalData) MarshalBinary() ([]byte, error) {
 	buf := &bytes.Buffer{}
 	_ = binary.Write(buf, binary.BigEndian, d.Scope)
 
+	if d.Scope != NormalTokenScopeAll {
+		_ = binary.Write(buf, binary.BigEndian, d.DerivedTokenExpiresAt)
+	}
+
 	return buf.Bytes(), nil
 }
 
 // UnmarshalBinary decodes the binary normal token additional data.
 func (d *NormalTokenAdditionalData) UnmarshalBinary(data []byte) error {
-	if len(data) != 1 {
+	if len(data) < 1 {
 		return errs.ErrCurrentInvalidToken
 	}
 
+	if NormalTokenScope(data[0]) == NormalTokenScopeAll && len(data) != 1 {
+		return errs.ErrCurrentInvalidToken
+	} else if NormalTokenScope(data[0]) != NormalTokenScopeAll && len(data) != 9 {
+		return errs.ErrCurrentInvalidToken
+	}
+
+	d.Scope = NormalTokenScopeInvalid
+	d.DerivedTokenExpiresAt = 0
+
 	buf := bytes.NewBuffer(data)
 	_ = binary.Read(buf, binary.BigEndian, &d.Scope)
+
+	if d.Scope != NormalTokenScopeAll {
+		_ = binary.Read(buf, binary.BigEndian, &d.DerivedTokenExpiresAt)
+	}
 
 	return nil
 }
