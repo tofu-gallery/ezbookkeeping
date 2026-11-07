@@ -158,7 +158,8 @@ class AuthenticatedImageRequestStripTokenPlugin implements WorkboxPlugin {
 
         if (url.searchParams.has('token')) {
             url.searchParams.delete('token');
-            return new Request(url.href, param.request);
+            const request: Request = param.request.mode === 'navigate' ? new Request(param.request, { mode: 'same-origin' }) : param.request;
+            return new Request(url.href, request);
         }
 
         return param.request;
@@ -172,8 +173,13 @@ interface MapCacheConfig {
     expirationPlugin: DynamicExpirationPlugin;
 }
 
-interface CustomIconCacheConfig {
-    customIconRequestStripTokenPlugin: AuthenticatedImageRequestStripTokenPlugin;
+interface TransactionPictureCacheConfig extends AuthenticatedImageCacheConfig {
+    enabled: boolean;
+    expirationPlugin: DynamicExpirationPlugin;
+}
+
+interface AuthenticatedImageCacheConfig {
+    imageRequestStripTokenPlugin: AuthenticatedImageRequestStripTokenPlugin;
 }
 
 declare const self: ServiceWorkerGlobalScope;
@@ -181,6 +187,8 @@ declare const self: ServiceWorkerGlobalScope;
 const SW_ASSETS_CACHE_NAME: string = 'ezbookkeeping-assets-cache';
 const SW_CODE_CACHE_NAME: string = 'ezbookkeeping-code-cache';
 const SW_MAP_CACHE_NAME: string = 'ezbookkeeping-map-cache';
+const SW_USER_AVATAR_CACHE_NAME: string = 'ezbookkeeping-user-avatar-cache';
+const SW_TRANSACTION_PICTURE_CACHE_NAME: string = 'ezbookkeeping-transaction-picture-cache';
 const SW_CUSTOM_ICON_CACHE_NAME: string = 'ezbookkeeping-custom-icon-cache';
 const SW_SHARE_CACHE_NAME: string = 'ezbookkeeping-share-cache';
 const SW_SHARE_IMAGE_URL_PATHNAME: string = '__share__image__';
@@ -188,6 +196,12 @@ const SW_SHARE_IMAGE_PARAM_NAME: string = 'image';
 
 const SW_MESSAGE_TYPE_UPDATE_MAP_CACHE_CONFIG: string = 'UPDATE_MAP_CACHE_CONFIG';
 const SW_MESSAGE_TYPE_UPDATE_MAP_CACHE_CONFIG_RESPONSE: string = 'UPDATE_MAP_CACHE_CONFIG_RESPONSE';
+
+const SW_MESSAGE_TYPE_UPDATE_TRANSACTION_PICTURE_CACHE_CONFIG: string = 'UPDATE_TRANSACTION_PICTURE_CACHE_CONFIG';
+const SW_MESSAGE_TYPE_UPDATE_TRANSACTION_PICTURE_CACHE_CONFIG_RESPONSE: string = 'UPDATE_TRANSACTION_PICTURE_CACHE_CONFIG_RESPONSE';
+
+const DEFAULT_TRANSACTION_PICTURE_CACHE_MAX_ENTRIES: number = 1000;
+const DEFAULT_TRANSACTION_PICTURE_CACHE_MAX_AGE_MILLISECONDS: number = 30 * 24 * 60 * 60 * 1000;
 
 const DEFAULT_MAP_CACHE_MAX_ENTRIES: number = 1000;
 const DEFAULT_MAP_CACHE_MAX_AGE_MILLISECONDS: number = 30 * 24 * 60 * 60 * 1000;
@@ -199,8 +213,18 @@ const mapCacheConfig: MapCacheConfig = {
     expirationPlugin: new DynamicExpirationPlugin(DEFAULT_MAP_CACHE_MAX_ENTRIES, DEFAULT_MAP_CACHE_MAX_AGE_MILLISECONDS)
 };
 
-const customIconCacheConfig: CustomIconCacheConfig = {
-    customIconRequestStripTokenPlugin: new AuthenticatedImageRequestStripTokenPlugin()
+const userAvatarCacheConfig: AuthenticatedImageCacheConfig = {
+    imageRequestStripTokenPlugin: new AuthenticatedImageRequestStripTokenPlugin()
+};
+
+const transactionPictureCacheConfig: TransactionPictureCacheConfig = {
+    enabled: true,
+    imageRequestStripTokenPlugin: new AuthenticatedImageRequestStripTokenPlugin(),
+    expirationPlugin: new DynamicExpirationPlugin(DEFAULT_TRANSACTION_PICTURE_CACHE_MAX_ENTRIES, DEFAULT_TRANSACTION_PICTURE_CACHE_MAX_AGE_MILLISECONDS)
+};
+
+const customIconCacheConfig: AuthenticatedImageCacheConfig = {
+    imageRequestStripTokenPlugin: new AuthenticatedImageRequestStripTokenPlugin()
 };
 
 self.skipWaiting();
@@ -288,11 +312,32 @@ registerRoute(
 );
 
 registerRoute(
+    /.*\/avatar\/\d+\.[a-zA-Z0-9]+/,
+    new StaleWhileRevalidate({
+        cacheName: SW_USER_AVATAR_CACHE_NAME,
+        plugins: [
+            userAvatarCacheConfig.imageRequestStripTokenPlugin
+        ]
+    })
+);
+
+registerRoute(
+    ({ url }) => transactionPictureCacheConfig.enabled && /.*\/pictures\/\d+\.[a-zA-Z0-9]+/.test(url.href),
+    new CacheFirst({
+        cacheName: SW_TRANSACTION_PICTURE_CACHE_NAME,
+        plugins: [
+            transactionPictureCacheConfig.imageRequestStripTokenPlugin,
+            transactionPictureCacheConfig.expirationPlugin
+        ]
+    })
+);
+
+registerRoute(
     /.*\/icons\/\d+\.png/,
     new CacheFirst({
         cacheName: SW_CUSTOM_ICON_CACHE_NAME,
         plugins: [
-            customIconCacheConfig.customIconRequestStripTokenPlugin
+            customIconCacheConfig.imageRequestStripTokenPlugin
         ]
     })
 );
@@ -358,6 +403,21 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
                         patterns: event.data.payload['patterns'],
                         maxEntries: mapCacheConfig.expirationPlugin.getMaxEntries(),
                         maxAgeMilliseconds: mapCacheConfig.expirationPlugin.getMaxAgeMilliseconds()
+                    }
+                });
+            }
+        } else if (event.data && event.data.type === SW_MESSAGE_TYPE_UPDATE_TRANSACTION_PICTURE_CACHE_CONFIG && 'payload' in event.data) {
+            transactionPictureCacheConfig.enabled = !!event.data.payload['enabled'];
+            transactionPictureCacheConfig.expirationPlugin.setMaxEntries(event.data.payload['maxEntries'] ?? DEFAULT_TRANSACTION_PICTURE_CACHE_MAX_ENTRIES);
+            transactionPictureCacheConfig.expirationPlugin.setMaxAgeMilliseconds(event.data.payload['maxAgeMilliseconds'] ?? DEFAULT_TRANSACTION_PICTURE_CACHE_MAX_AGE_MILLISECONDS);
+
+            if (event.ports && event.ports[0] && typeof event.ports[0].postMessage === 'function') {
+                event.ports[0].postMessage({
+                    type: SW_MESSAGE_TYPE_UPDATE_TRANSACTION_PICTURE_CACHE_CONFIG_RESPONSE,
+                    payload: {
+                        enabled: transactionPictureCacheConfig.enabled,
+                        maxEntries: transactionPictureCacheConfig.expirationPlugin.getMaxEntries(),
+                        maxAgeMilliseconds: transactionPictureCacheConfig.expirationPlugin.getMaxAgeMilliseconds()
                     }
                 });
             }
